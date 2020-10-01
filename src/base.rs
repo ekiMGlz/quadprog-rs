@@ -5,7 +5,7 @@ use std::collections::HashMap;
 mod util;
 
 #[derive(Serialize, Deserialize, Debug)]
-struct ConvexQP {
+pub struct ConvexQP {
     hess: DMatrix<f64>,
     c: DVector<f64>,
     a: Option<DMatrix<f64>>,
@@ -19,7 +19,7 @@ struct ConvexQP {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct QPOptions {
+pub struct QPOptions {
     algorithm: QPAlgorithm,
     max_iterations: usize,
     opt_tol: f64,
@@ -30,7 +30,7 @@ struct QPOptions {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct QPSolution {
+pub struct QPSolution {
     x: DVector<f64>,
     eq_multipliers: Option<DVector<f64>>,
     ineq_multipliers: Option<DVector<f64>>,
@@ -42,17 +42,18 @@ struct QPSolution {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-enum QPAlgorithm {
+pub enum QPAlgorithm {
     InteriorPoint,
     ActiveSet,
     //Other(fn(&ConvexQP) -> Result<QPSolution, QPError>),
 }
 
 #[derive(Debug)]
-enum QPError {
+pub enum QPError {
     MaxIterationsExceeded(String),
     Infeasible(String),
     DimensionMismatch(String),
+    RankDeficient(String),
     Other(String),
 }
 
@@ -98,7 +99,7 @@ mod tests {
 
     #[test]
     fn read_full_problem() {
-        let file = File::open("sample_problems/full_problem.json").unwrap();
+        let file = File::open("qp/read/full_problem.json").unwrap();
         let reader = BufReader::new(file);
         let problem: ConvexQP = serde_json::from_reader(reader).unwrap();
 
@@ -122,7 +123,7 @@ mod tests {
 
     #[test]
     fn read_minimal_problem() {
-        let file = File::open("sample_problems/minimal_problem.json").unwrap();
+        let file = File::open("qp/read/minimal_problem.json").unwrap();
         let reader = BufReader::new(file);
         let problem: ConvexQP = serde_json::from_reader(reader).unwrap();
 
@@ -139,7 +140,7 @@ mod tests {
 
     #[test]
     fn read_one_sided_bounds() {
-        let file = File::open("sample_problems/one_sided_bounds.json").unwrap();
+        let file = File::open("qp/read/one_sided_bounds.json").unwrap();
         let reader = BufReader::new(file);
         let problem: ConvexQP = serde_json::from_reader(reader).unwrap();
 
@@ -152,7 +153,7 @@ mod tests {
 
     #[test]
     fn read_yaml() {
-        let file = File::open("sample_problems/mid_problem.yaml").unwrap();
+        let file = File::open("qp/read/mid_problem.yaml").unwrap();
         let reader = BufReader::new(file);
         let problem: ConvexQP = serde_yaml::from_reader(reader).unwrap();
 
@@ -166,7 +167,7 @@ mod tests {
         let bounds = problem.bounds.unwrap();
 
         assert_eq!(bounds.get(&0).unwrap(), &(Some(0.0), Some(1.0)));
-        assert_eq!(bounds.get(&1).unwrap(), &(Some(-f64::INFINITY), Some(0.0)));
+        assert_eq!(bounds.get(&1).unwrap(), &(Some(f64::NEG_INFINITY), Some(f64::INFINITY)));
         assert_eq!(bounds.get(&2).unwrap(), &(Some(0.0), None));
     }
 }
