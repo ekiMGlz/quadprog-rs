@@ -1,6 +1,6 @@
 use nalgebra::{DMatrix, DVector};
 use serde::{Serialize, Deserialize, Deserializer};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 mod util;
 
@@ -12,7 +12,7 @@ pub struct ConvexQP {
     b: Option<DVector<f64>>,
     a_eq: Option<DMatrix<f64>>,
     b_eq: Option<DVector<f64>>,
-    bounds: Option<HashMap<usize, (Option<f64>, Option<f64>)>>,
+    bounds: Option<BTreeMap<usize, (Option<f64>, Option<f64>)>>,
     x0: Option<DVector<f64>>,
     #[serde(default)]
     options: QPOptions,

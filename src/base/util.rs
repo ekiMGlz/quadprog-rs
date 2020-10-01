@@ -1,5 +1,5 @@
 use nalgebra::{DMatrix, DVector, QR};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 // struct for problem data after presolving
 #[derive(Debug)]
@@ -16,7 +16,9 @@ pub(crate) struct RawQP {
 }
 
 pub(crate) fn presolve(problem: &crate::base::ConvexQP) -> Result<RawQP, crate::base::QPError>{
-    
+
+    let numerical_zero = 1e-8;
+
     // Check dimensions
     let (n, hess, c) = {
         let n1 = problem.c.len();
@@ -42,24 +44,24 @@ pub(crate) fn presolve(problem: &crate::base::ConvexQP) -> Result<RawQP, crate::
                     // Correct dims
                     let mut a_eq = matrix.clone();
                     let mut b_eq = vec.clone();
-                    
+
                     // Check and remove zero rows
                     for i in (0..m1).rev(){
-                        if a_eq.row(i).amax() < 1e-8 {
-                            if b_eq[i].abs() < 1e-8 {
+                        if a_eq.row(i).amax() < numerical_zero {
+                            if b_eq[i].abs() < numerical_zero {
                                 a_eq = a_eq.remove_row(i);
                                 b_eq = b_eq.remove_row(i);
                             }else{
                                 return Err(crate::base::QPError::Infeasible(format!("{}-th equality restriction is infeasible, 0 != {}.", i, b_eq[i])));
                             }
-                            
+
                         }
                     }
 
                     // Check a_eq for fulll rank
                     let m = a_eq.nrows();
                     let r = QR::new(a_eq.clone()).r();
-                    if r.row(m - 1).amax() < 1e-8 {
+                    if r.row(m - 1).amax() < numerical_zero {
                         // QR factorization has a 0 row in R matrix with m <=n, therefore A_eq is rank deficient
                         return Err(crate::base::QPError::RankDeficient("Equality constraints are rank deficient, check for redundant constraints.".to_string()))
                     }
@@ -89,11 +91,11 @@ pub(crate) fn presolve(problem: &crate::base::ConvexQP) -> Result<RawQP, crate::
 
     let (mut bounds, mut m_lb, mut m_ub) = if let Some(map) = &problem.bounds {
         // verify bounds & count bounds
-        
+
         let mut m_lb = 0;
         let mut m_ub = 0;
 
-        let bounds: HashMap<_, _> = map.iter().filter_map(|(&k, &v)| { 
+        let bounds: BTreeMap<_, _> = map.iter().filter_map(|(&k, &v)| {
             if k >= n{
                 None
             }else {
@@ -117,18 +119,165 @@ pub(crate) fn presolve(problem: &crate::base::ConvexQP) -> Result<RawQP, crate::
                 _ => {m_ub += 1;},
             }
         }
-        
+
         (bounds, m_lb, m_ub)
 
     }else{
-        (HashMap::new(), 0, 0)
+        (BTreeMap::new(), 0, 0)
     };
 
-    
+    let (m_ineq, a, b) = if let Some(vec) = &problem.b {
+        let m1 = vec.len();
+        if let Some(matrix) = &problem.a {
+            let (m2, n2) = matrix.shape();
+            if m1 == m2{
+                if n == n2{
+                    // Correct dims
+                    let mut a = matrix.clone();
+                    let mut b = vec.clone();
 
-    
+                    // Check a for 0 rows or singleton rows
+                    for i in (0..m1).rev(){
+                        let row = a.row(i);
+                        let mut row_iter = row.iter().enumerate().filter(|(_, x)| {x.abs() < numerical_zero});
+                        match row_iter.next() {
+                            None => {
+                                // 0 nonzero elements
+                                if b[i] > -numerical_zero {
+                                    a = a.remove_row(i);
+                                    b = b.remove_row(i);
+                                }else{
+                                    return Err(crate::base::QPError::Infeasible(format!("{}-th inequality restriction is infeasible, 0 !<= {}.", i, b[i])));
+                                }
+                            },
+                            Some((j, x)) => {
+                                if let None = row_iter.next() {
+                                    // Exactly 1 nonzero element. replace ineq with bound
+                                    let bound = b[j] / x;
 
-    
+                                    // Update bound, checking feasibility
+                                    match bounds.get(&j) {
+
+                                        Some((None, Some(ub))) => {
+                                            let ub = *ub;
+                                            if x.is_sign_positive() {
+                                                if bound < ub {
+                                                    // tighter bound found, update
+                                                    bounds.insert(j, (None, Some(bound)));
+                                                }
+                                                // looser bound, ignore
+                                            }else{
+                                                if bound <= ub {
+                                                    // lower bound found, update
+                                                    bounds.insert(j, (Some(bound), Some(ub)));
+                                                    m_lb += 1;
+                                                }else {
+                                                    // inconsistent bounds
+                                                    return Err(crate::base::QPError::Infeasible(format!("{}-th inequality restriction contradicts bounds for {}-th variable", i, j)))
+                                                }
+                                            }
+                                        },
+                                        Some((Some(lb), None)) => {
+                                            let lb = *lb;
+
+                                            if x.is_sign_positive() {
+                                                if bound >= lb {
+                                                    // upper bound found, update
+                                                    bounds.insert(j, (Some(lb), Some(bound)));
+                                                    m_ub += 1;
+                                                }else{
+                                                    // inconsistent bounds
+                                                    return Err(crate::base::QPError::Infeasible(format!("{}-th inequality restriction contradicts bounds for {}-th variable", i, j)))
+                                                }
+                                                
+                                            }else{
+                                                if bound > lb {
+                                                    // tighter bound found, update
+                                                    bounds.insert(j, (Some(bound), None));
+                                                }
+                                                // lloser bound, ignore
+                                            }
+                                        },
+                                        Some((Some(lb), Some(ub))) => {
+                                            let ub = *ub;
+                                            let lb = *lb;
+
+                                            if x.is_sign_positive() {
+                                                if bound < ub {
+                                                    if bound >= lb {
+                                                        // tighter upper bound found
+                                                        bounds.insert(j, (Some(lb), Some(bound)));
+                                                    }else {
+                                                        // inconsistent bound
+                                                        return Err(crate::base::QPError::Infeasible(format!("{}-th inequality restriction contradicts bounds for {}-th variable", i, j)))
+                                                    }
+                                                }
+                                                // looser upper bound
+                                            }else{
+                                                if bound > lb {
+                                                    if bound <= ub {
+                                                        // tighter lower bound found
+                                                        bounds.insert(j, (Some(bound), Some(ub)));
+                                                    }else {
+                                                        // inconsistent bound
+                                                        return Err(crate::base::QPError::Infeasible(format!("{}-th inequality restriction contradicts bounds for {}-th variable", i, j)))
+                                                    }
+                                                }
+                                                // looser lower bound
+                                            }
+                                        },
+                                        _ => {
+                                            // Variable is not bound, add the bound
+                                            if x.is_sign_positive() {
+                                                bounds.insert(j, (None, Some(bound)));
+                                                m_ub += 1;
+                                            } else {
+                                                bounds.insert(j, (Some(bound), None));
+                                                m_lb += 1;
+                                            }
+
+                                        },
+
+                                    }
+
+                                    // Remove the inequality
+                                    a = a.remove_row(i);
+                                    b = b.remove_row(i);
+
+                                }
+                                // More than 1 nonzero element
+                            },
+                        }
+                    }
+
+
+
+                    (0, DMatrix::<f64>::zeros(0, n), DVector::<f64>::zeros(0))
+
+                }else{
+                    return Err(crate::base::QPError::DimensionMismatch(format!("a should be {0}x{1}, but instead is {0}x{2}.", m2, n, n2)));
+                }
+            }else{
+                return Err(crate::base::QPError::DimensionMismatch(format!("b has {0} rows, but a has {1}.", m1, m2)));
+            }
+        }else {
+            if vec.len() > 0 {
+                return Err(crate::base::QPError::DimensionMismatch("Have b, expected a.".to_string()));
+            }
+            (0, DMatrix::<f64>::zeros(0, n), DVector::<f64>::zeros(0))
+        }
+    }else {
+        if let Some(matrix) = &problem.a {
+            if matrix.nrows() > 0 {
+                return Err(crate::base::QPError::DimensionMismatch("Have a, expected b.".to_string()));
+            }
+        };
+        (0, DMatrix::<f64>::zeros(0, n), DVector::<f64>::zeros(0))
+    };
+
+
+
+
 
     unimplemented!()
 }
@@ -142,7 +291,7 @@ fn full_qr(matrix: &DMatrix<f64>) -> (DMatrix<f64>, DMatrix<f64>){
     }else{
         let mut q = DMatrix::<f64>::identity(m, m);
         let mut v = -matrix.column(0).clone();
-        
+
         // Check if v is (x, 0, 0, ..., 0)T, otherwise use a reflector
         if  v.rows(1, m - 1).amax() > 1e-6{
             v[0] += v.norm();
@@ -157,14 +306,14 @@ fn full_qr(matrix: &DMatrix<f64>) -> (DMatrix<f64>, DMatrix<f64>){
             }
         };
 
-        
+
 
         let mut r = &q*matrix;
 
         for col in 1..n.min(m) {
             let vec_size = m - col;
             let mut v = -r.slice((col, col), (vec_size, 1)).clone();
-            
+
             if v.rows(1, vec_size - 1).amax() > 1e-6{
                 v[0] += v.norm();
                 let v_dot_v = v.dot(&v);
@@ -182,7 +331,7 @@ fn full_qr(matrix: &DMatrix<f64>) -> (DMatrix<f64>, DMatrix<f64>){
                 r = &h*r;
                 q = &h*q;
             };
-            
+
         }
 
         (q.transpose(), r)
@@ -193,7 +342,7 @@ fn forward_substitution(lower: &DMatrix<f64>, b: &DVector<f64>) -> DVector<f64>{
     // solves a square Lx=b system
     let n = b.len();
     let mut x = DVector::<f64>::zeros(n);
-    
+
     for i in 0..n{
         let mut sum = b[i];
         for j in 0..i{
@@ -209,7 +358,7 @@ fn backwards_substitution(upper: &DMatrix<f64>, b: &DVector<f64>) -> DVector<f64
     // solves a square Ux=b system
     let n = b.len();
     let mut x = DVector::<f64>::zeros(n);
-    
+
     for i in (0..n).rev(){
         let mut sum = b[i];
         for j in i + 1..n{
@@ -240,6 +389,6 @@ mod tests {
         assert!(f64::NEG_INFINITY < -100000000.0);
         assert!(f64::INFINITY > 100000000.0);
         assert!(!(f64::INFINITY < f64::INFINITY));
-        
+
     }
 }
