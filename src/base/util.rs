@@ -41,7 +41,7 @@ pub(crate) fn presolve(problem: &ConvexQP) -> Result<RawQP, QPError>{
         if let Some(matrix) = &problem.a_eq {
             let (m2, n2) = matrix.shape();
             if m2 > n2 {
-                return Err(QPError::RankDeficient("a_eq has {} rows, but only {} cols, therefore a_eq does not have full row rank", m2, n2));
+                return Err(QPError::RankDeficient(format!("a_eq has {} rows, but only {} cols, therefore a_eq does not have full row rank", m2, n2)));
             }
             if m1 == m2{
                 if n == n2{
