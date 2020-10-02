@@ -1,5 +1,6 @@
 use nalgebra::{DMatrix, DVector, QR};
 use std::collections::BTreeMap;
+use crate::base::{QPError, ConvexQP};
 
 // struct for problem data after presolving
 #[derive(Debug)]
@@ -11,11 +12,11 @@ pub(crate) struct RawQP {
     a_eq: DMatrix<f64>, // A_eq, full rank, no full zero rows
     b_eq: DVector<f64>, // b_eq to match A_eq changes
     dims: (usize, usize, usize, usize, usize, usize), //(n, m, m_eq, m_ineq, m_lb, m_ub)
-    x0: DVector<f64>,
+    x0: Option<DVector<f64>>,
     options: crate::base::QPOptions,
 }
 
-pub(crate) fn presolve(problem: &crate::base::ConvexQP) -> Result<RawQP, crate::base::QPError>{
+pub(crate) fn presolve(problem: &ConvexQP) -> Result<RawQP, QPError>{
 
     let numerical_zero = 1e-8;
 
@@ -28,10 +29,10 @@ pub(crate) fn presolve(problem: &crate::base::ConvexQP) -> Result<RawQP, crate::
                 // TODO: Check hess convexity (?)
                 (n1, problem.hess.symmetric_part(), problem.c.clone())
             }else{
-                return Err(crate::base::QPError::DimensionMismatch(format!("hess is {}x{}, but c is {}x1", n2, n3, n1)));
+                return Err(QPError::DimensionMismatch{matrix: "c".to_string(), dims: (n1, 1), expected_dims:(n2, 1)});
             }
         }else{
-            return Err(crate::base::QPError::DimensionMismatch(format!("hess should be square, but instead is {}x{}", n2, n3)));
+            return Err(QPError::DimensionMismatch{matrix: "hess".to_string(), dims: (n2, n3), expected_dims:(n2, n2)});
         }
     };
 
@@ -39,6 +40,9 @@ pub(crate) fn presolve(problem: &crate::base::ConvexQP) -> Result<RawQP, crate::
         let m1 = vec.len();
         if let Some(matrix) = &problem.a_eq {
             let (m2, n2) = matrix.shape();
+            if m2 > n2 {
+                return Err(QPError::RankDeficient("a_eq has {} rows, but only {} cols, therefore a_eq does not have full row rank", m2, n2));
+            }
             if m1 == m2{
                 if n == n2{
                     // Correct dims
@@ -69,21 +73,21 @@ pub(crate) fn presolve(problem: &crate::base::ConvexQP) -> Result<RawQP, crate::
                     (m, a_eq, b_eq)
 
                 }else{
-                    return Err(crate::base::QPError::DimensionMismatch(format!("a_eq should be {0}x{1}, but instead is {0}x{2}.", m2, n, n2)));
+                    return Err(crate::base::QPError::DimensionMismatch{matrix: "a_eq".to_string(), dims: (m2, n2), expected_dims:(m2, n)});
                 }
             }else{
-                return Err(crate::base::QPError::DimensionMismatch(format!("b_eq has {0} rows, but a_eq has {1}.", m1, m2)));
+                return Err(QPError::DimensionMismatch{matrix: "b_eq".to_string(), dims: (m1, 1), expected_dims:(m2, 1)});
             }
         }else {
             if vec.len() > 0 {
-                return Err(crate::base::QPError::DimensionMismatch("Have b_eq, expected a_eq.".to_string()));
+                return Err(QPError::DimensionMismatch{matrix: "b_eq".to_string(), dims: (vec.len(), 1), expected_dims:(0, 1)});
             }
             (0, DMatrix::<f64>::zeros(0, n), DVector::<f64>::zeros(0))
         }
     }else {
         if let Some(matrix) = &problem.a_eq {
             if matrix.nrows() > 0 {
-                return Err(crate::base::QPError::DimensionMismatch("Have a_eq, expected b_eq.".to_string()));
+                return Err(QPError::DimensionMismatch{matrix: "a_eq".to_string(), dims: matrix.shape(), expected_dims:(0, n)});
             }
         };
         (0, DMatrix::<f64>::zeros(0, n), DVector::<f64>::zeros(0))
@@ -111,9 +115,9 @@ pub(crate) fn presolve(problem: &crate::base::ConvexQP) -> Result<RawQP, crate::
 
         for (&k, &v) in bounds.iter(){
             match v {
-                (Some(x), _) if x.is_infinite() & x.is_sign_positive() => return Err(crate::base::QPError::Infeasible(format!("Variable {} has +∞ lower bound.", k))),
-                (_, Some(x)) if x.is_infinite() & x.is_sign_negative() => return Err(crate::base::QPError::Infeasible(format!("Variable {} has -∞ upper bound.", k))),
-                (Some(lb), Some(ub)) if lb > ub => return Err(crate::base::QPError::Infeasible(format!("Variable {} has inconsistent bounds [{}, {}].", k, lb, ub))),
+                (Some(x), _) if x.is_infinite() & x.is_sign_positive() => return Err(QPError::Infeasible(format!("Variable {} has +∞ lower bound.", k))),
+                (_, Some(x)) if x.is_infinite() & x.is_sign_negative() => return Err(QPError::Infeasible(format!("Variable {} has -∞ upper bound.", k))),
+                (Some(lb), Some(ub)) if lb > ub => return Err(QPError::Infeasible(format!("Variable {} has inconsistent bounds [{}, {}].", k, lb, ub))),
                 (Some(_), Some(_)) => {m_lb += 1; m_ub += 1;},
                 (Some(_), None) => {m_lb += 1;},
                 _ => {m_ub += 1;},
@@ -250,36 +254,57 @@ pub(crate) fn presolve(problem: &crate::base::ConvexQP) -> Result<RawQP, crate::
                         }
                     }
 
+                    let m_ineq = a.nrows();
+                    a = a.insert_rows(m_ineq, m_lb + m_ub, 0.0);
+                    b = b.insert_rows(m_ineq, m_lb + m_ub, 0.0);
+
+                    for (i, (j, v)) in bounds.iter().filter(|(_, v)| {matches!(v, (Some(x), None) if x.is_finite())}).enumerate(){
+                        a[(m_ineq + i, *j)] = 1.0;
+                        b[m_ineq + i] = v.0.unwrap();
+                    }
+
+                    for (i, (j, v)) in bounds.iter().filter(|(_, v)| {matches!(v, (None, Some(x)) if x.is_finite())}).enumerate(){
+                        a[(m_ineq + m_lb + i, *j)] = -1.0;
+                        b[m_ineq + m_lb + i] = -v.1.unwrap();
+                    }
 
 
-                    (0, DMatrix::<f64>::zeros(0, n), DVector::<f64>::zeros(0))
+                    (m_ineq, a, b)
 
                 }else{
-                    return Err(crate::base::QPError::DimensionMismatch(format!("a should be {0}x{1}, but instead is {0}x{2}.", m2, n, n2)));
+                    return Err(QPError::DimensionMismatch{matrix: "a".to_string(), dims: (m2, n2), expected_dims:(m2, n)});
                 }
             }else{
-                return Err(crate::base::QPError::DimensionMismatch(format!("b has {0} rows, but a has {1}.", m1, m2)));
+                return Err(QPError::DimensionMismatch{matrix: "b".to_string(), dims: (m1, 1), expected_dims:(m2, 1)});
             }
         }else {
             if vec.len() > 0 {
-                return Err(crate::base::QPError::DimensionMismatch("Have b, expected a.".to_string()));
+                
+                return Err(QPError::DimensionMismatch{matrix: "b".to_string(), dims: (vec.len(), 1), expected_dims:(0, 1)});
             }
             (0, DMatrix::<f64>::zeros(0, n), DVector::<f64>::zeros(0))
         }
     }else {
         if let Some(matrix) = &problem.a {
             if matrix.nrows() > 0 {
-                return Err(crate::base::QPError::DimensionMismatch("Have a, expected b.".to_string()));
+                return Err(QPError::DimensionMismatch{matrix: "a".to_string(), dims: matrix.shape(), expected_dims:(0, n)});
             }
         };
         (0, DMatrix::<f64>::zeros(0, n), DVector::<f64>::zeros(0))
     };
 
 
-
-
-
-    unimplemented!()
+    Ok(RawQP {
+        hess,
+        c,
+        a,
+        b,
+        a_eq,
+        b_eq,
+        dims: (n, m_ineq + m_lb + m_ub, m_eq, m_ineq, m_lb, m_ub),
+        x0: problem.x0.clone(),
+        options: problem.options.clone()
+    })
 }
 
 fn full_qr(matrix: &DMatrix<f64>) -> (DMatrix<f64>, DMatrix<f64>){
@@ -373,6 +398,8 @@ fn backwards_substitution(upper: &DMatrix<f64>, b: &DVector<f64>) -> DVector<f64
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
+    use std::io::BufReader;
 
     #[test]
     fn qr_rank() {
@@ -390,5 +417,69 @@ mod tests {
         assert!(f64::INFINITY > 100000000.0);
         assert!(!(f64::INFINITY < f64::INFINITY));
 
+    }
+
+    #[test]
+    fn presolve_hess_c() {
+        let file = File::open("qp/presolve/minimal_problem.json").unwrap();
+        let reader = BufReader::new(file);
+        let problem: ConvexQP = serde_json::from_reader(reader).unwrap();
+        let raw_problem = presolve(&problem).unwrap();
+
+        assert_eq!(raw_problem.dims, (3, 0, 0, 0, 0, 0));
+        assert_eq!(raw_problem.a.shape(), (0, 3));
+        assert_eq!(raw_problem.a_eq.shape(), (0, 3));
+        assert_eq!(raw_problem.b.len(), 0);
+        assert_eq!(raw_problem.b_eq.len(), 0);
+    }
+
+    #[test]
+    fn presolve_rectangular_hess() {
+        let file = File::open("qp/presolve/rectangular_hess.yaml").unwrap();
+        let reader = BufReader::new(file);
+        let problem: ConvexQP = serde_yaml::from_reader(reader).unwrap();
+        
+        let error = presolve(&problem).expect_err("Expected error from presolve");
+
+        if let QPError::DimensionMismatch{matrix, dims, expected_dims} = error {
+            assert_eq!(matrix, "hess".to_string());
+            assert_eq!(dims, (3, 2));
+            assert_eq!(expected_dims, (3, 3));
+        }else{
+            panic!("Wrong type of error from presolve: \"{}\"", error);
+        }
+
+    }
+
+    #[test]
+    fn presolve_rectangular_hess2() {
+        let file = File::open("qp/presolve/rectangular_hess2.yaml").unwrap();
+        let reader = BufReader::new(file);
+        let problem: ConvexQP = serde_yaml::from_reader(reader).unwrap();
+        let error = presolve(&problem).expect_err("Expected error from presolve");
+
+        if let QPError::DimensionMismatch{matrix, dims, expected_dims} = error {
+            assert_eq!(matrix, "hess".to_string());
+            assert_eq!(dims, (2, 3));
+            assert_eq!(expected_dims, (2, 2));
+        }else{
+            panic!("Wrong type of error from presolve: \"{}\"", error);
+        }
+    }
+
+    #[test]
+    fn presolve_dims_hess_c() {
+        let file = File::open("qp/presolve/dims_hess_c.yaml").unwrap();
+        let reader = BufReader::new(file);
+        let problem: ConvexQP = serde_yaml::from_reader(reader).unwrap();
+        let error = presolve(&problem).expect_err("Expected error from presolve");
+
+        if let QPError::DimensionMismatch{matrix, dims, expected_dims} = error {
+            assert_eq!(matrix, "c".to_string());
+            assert_eq!(dims, (3, 1));
+            assert_eq!(expected_dims, (2, 1));
+        }else{
+            panic!("Wrong type of error from presolve: \"{}\"", error);
+        }
     }
 }

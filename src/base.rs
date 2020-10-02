@@ -1,6 +1,7 @@
 use nalgebra::{DMatrix, DVector};
-use serde::{Serialize, Deserialize, Deserializer};
+use serde::{Serialize, Deserialize};
 use std::collections::BTreeMap;
+use thiserror::Error;
 
 mod util;
 
@@ -18,7 +19,7 @@ pub struct ConvexQP {
     options: QPOptions,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct QPOptions {
     algorithm: QPAlgorithm,
     max_iterations: usize,
@@ -29,7 +30,7 @@ pub struct QPOptions {
     verbose: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct QPSolution {
     x: DVector<f64>,
     eq_multipliers: Option<DVector<f64>>,
@@ -41,20 +42,32 @@ pub struct QPSolution {
     first_order_cond: f64,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum QPAlgorithm {
     InteriorPoint,
     ActiveSet,
     //Other(fn(&ConvexQP) -> Result<QPSolution, QPError>),
 }
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum QPError {
-    MaxIterationsExceeded(String),
+    #[error("Maximum number of iterations reached. {msg}. Last known solution had function value {fval} and first order condition {first_order_cond}")]
+    MaxIterationsReached{
+        msg: String,
+        last_soln: DVector<f64>,
+        fval: f64,
+        first_order_cond: f64,
+    },
+    #[error("Infeasibility detected: {0}")]
     Infeasible(String),
-    DimensionMismatch(String),
+    #[error("Dimension error: {matrix} is {}x{} but should be {}x{}", dims.0, dims.1, expected_dims.0, expected_dims.1)]
+    DimensionMismatch { 
+        matrix: String, 
+        dims: (usize, usize), 
+        expected_dims: (usize, usize)
+    },
+    #[error("Rank deficiency found: {0}")]
     RankDeficient(String),
-    Other(String),
 }
 
 impl Default for ConvexQP {
