@@ -19,4 +19,14 @@ b_eq:
   data: [1, -1, 0]
 
 bounds:
-  0: [0, -.inf]
+  0: [0, 2]
+
+a:
+  nrows: 4
+  ncols: 4
+  data: [-1,1,0,1,0,1,0,0,0,1,0,0,0,1,0,0]
+
+b:
+  nrows: 4
+  ncols: null
+  data: [1,10,0,3]

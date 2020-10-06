@@ -68,6 +68,12 @@ pub enum QPError {
     },
     #[error("Rank deficiency found: {0}")]
     RankDeficient(String),
+    #[error("{matrix} has NaN/∞ in entry ({row}, {col})")]
+    Undefined{
+        matrix: String,
+        row: usize, 
+        col: usize,
+    },
 }
 
 impl Default for ConvexQP {

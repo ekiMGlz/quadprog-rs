@@ -5,6 +5,7 @@
 * [x] Rectangular hess
 * [x] Wrong c dims
 * [ ] Non positive semi-definite hess
+* [x] inf/nan values
 
 ### Eq constraints
 
@@ -18,35 +19,32 @@
 * [x] a_eq has zero rows with non-zero rhs
 * [x] a_eq is rank deficient
 * [x] a_eq has zero rows and is rank deficient
+* [ ] inf/nan values
 
 ### Bounds
 
 * [x] Base, no ineq, 2 lb, 2 ub, 1 redundant, 1 extra
-* [ ] +∞ lower bound
-* [ ] -∞ upper bound
-* [ ] Upper bound \< lower bound
-* [ ] Ignore (None, None), (-∞, +∞), (None, +∞), (-∞, None) bounds
-* [ ] Ignore bounds beyond # vars
+* [x] +∞ lower bound
+* [x] -∞ upper bound
+* [x] Upper bound \< lower bound
+* [x] Ignore (None, None), (-∞, +∞), (None, +∞), (-∞, None) bounds
+* [x] Ignore bounds beyond # vars
+* [ ] inf/nan values
 
 ### Inequality constraints
 
-* [ ] Base full problem read
-* [ ] Wrong b, a dims
-  * [ ] Wrong # of cols
-  * [ ] # of rows different
-  * [ ] b, no a
-  * [ ] a, no b
-* [ ] a has zero rows
-* [ ] a has zero rows and negative rhs
-* [ ] a has singleton rows
-  * [ ] new lower bound
-  * [ ] new upper bound
-  * [ ] inconsistent bound
-  * [ ] redundant bound
-* [ ] correct ineq matrix and rhs construction
-  * [ ] No lb
-  * [ ] No ub
-  * [ ] No ineq
-  * [ ] Only ineq
-  * [ ] Only lb
-  * [ ] Only ub
+* [x] Base full problem read
+* [x] Wrong b, a dims
+  * [x] Wrong # of cols
+  * [x] # of rows different
+  * [x] b, no a
+  * [x] a, no b
+* [x] a has zero rows
+* [x] a has zero rows and negative rhs
+* [x] a has singleton rows
+  * [x] new lower bound
+  * [x] new upper bound
+  * [x] inconsistent lower bound
+  * [x] inconsistent upper bound
+  * [x] redundant bounds
+* [ ] inf/nan values

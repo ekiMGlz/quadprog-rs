@@ -1,0 +1,22 @@
+hess:
+  nrows: 4
+  ncols: 4
+  data: [1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]
+
+c:
+  nrows: 4
+  ncols: null
+  data: [1,1,1,1]
+
+a_eq:
+  nrows: 3
+  ncols: 4
+  data: [1,0,0,0,1,0,-1,0,0,0,-1,0]
+
+b_eq:
+  nrows: 3
+  ncols: null
+  data: [1, -1, 0]
+
+bounds:
+  0: [.inf, 1]
