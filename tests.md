@@ -19,7 +19,7 @@
 * [x] a_eq has zero rows with non-zero rhs
 * [x] a_eq is rank deficient
 * [x] a_eq has zero rows and is rank deficient
-* [ ] inf/nan values
+* [x] inf/nan values
 
 ### Bounds
 
@@ -29,7 +29,7 @@
 * [x] Upper bound \< lower bound
 * [x] Ignore (None, None), (-∞, +∞), (None, +∞), (-∞, None) bounds
 * [x] Ignore bounds beyond # vars
-* [ ] inf/nan values
+* [x] inf/nan values
 
 ### Inequality constraints
 
@@ -47,4 +47,4 @@
   * [x] inconsistent lower bound
   * [x] inconsistent upper bound
   * [x] redundant bounds
-* [ ] inf/nan values
+* [x] inf/nan values

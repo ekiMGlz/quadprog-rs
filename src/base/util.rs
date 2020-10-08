@@ -1,6 +1,6 @@
 use nalgebra::{DMatrix, DVector, QR};
-use std::collections::BTreeMap;
-use crate::base::{QPError, ConvexQP};
+use std::collections::{BTreeMap, HashSet};
+use crate::base::*;
 
 // struct for problem data after presolving
 #[derive(Debug)]
@@ -42,11 +42,11 @@ pub(crate) fn presolve(problem: &ConvexQP) -> Result<RawQP, QPError>{
 
                     return Err(QPError::Undefined{matrix: "hess".to_string(), row, col})
                 }
-                
-                if let Some((i, _)) = problem.c.iter().enumerate().find(|&(_, &x)| {!x.is_finite()}) {
-                    let row = i % n2;
 
-                    return Err(QPError::Undefined{matrix: "c".to_string(), row, col: 1})
+                if let Some((i, _)) = problem.c.iter().enumerate().find(|&(_, &x)| {!x.is_finite()}) {
+                    let row = i;
+
+                    return Err(QPError::Undefined{matrix: "c".to_string(), row, col: 0})
                 }
 
                 // TODO: Check hess convexity (?)
@@ -65,6 +65,19 @@ pub(crate) fn presolve(problem: &ConvexQP) -> Result<RawQP, QPError>{
             let (m2, n2) = matrix.shape();
             if m1 == m2{
                 if n == n2{
+                    if let Some((i, _)) = matrix.iter().enumerate().find(|&(_, &x)| {!x.is_finite()}) {
+                        let row = i % m2;
+                        let col = i / m2;
+
+                        return Err(QPError::Undefined{matrix: "a_eq".to_string(), row, col})
+                    }
+
+                    if let Some((i, _)) = vec.iter().enumerate().find(|&(_, &x)| {!x.is_finite()}) {
+                        let row = i;
+
+                        return Err(QPError::Undefined{matrix: "b_eq".to_string(), row, col: 0})
+                    }
+
                     // Correct dims
                     let mut a_eq = matrix.clone();
                     let mut b_eq = vec.clone();
@@ -76,7 +89,7 @@ pub(crate) fn presolve(problem: &ConvexQP) -> Result<RawQP, QPError>{
                                 a_eq = a_eq.remove_row(i);
                                 b_eq = b_eq.remove_row(i);
                             }else{
-                                return Err(crate::base::QPError::Infeasible(format!("Equality constraint {} is infeasible, zero row with non-zero rhs ({}).", i, b_eq[i])));
+                                return Err(QPError::Infeasible(format!("Equality constraint {} is infeasible, zero row with non-zero rhs ({}).", i, b_eq[i])));
                             }
 
                         }
@@ -92,13 +105,13 @@ pub(crate) fn presolve(problem: &ConvexQP) -> Result<RawQP, QPError>{
                     let r = QR::new(a_eq.clone()).r();
                     if r.row(m - 1).amax() < numerical_zero {
                         // QR factorization has a 0 row in R matrix with m <=n, therefore A_eq is rank deficient
-                        return Err(crate::base::QPError::RankDeficient("Equality constraints are rank deficient, check for redundant constraints.".to_string()))
+                        return Err(QPError::RankDeficient("Equality constraints are rank deficient, check for redundant constraints.".to_string()))
                     }
 
                     (m, a_eq, b_eq)
 
                 }else{
-                    return Err(crate::base::QPError::DimensionMismatch{matrix: "a_eq".to_string(), dims: (m2, n2), expected_dims:(m2, n)});
+                    return Err(QPError::DimensionMismatch{matrix: "a_eq".to_string(), dims: (m2, n2), expected_dims:(m2, n)});
                 }
             }else{
                 return Err(QPError::DimensionMismatch{matrix: "b_eq".to_string(), dims: (m1, 1), expected_dims:(m2, 1)});
@@ -161,6 +174,19 @@ pub(crate) fn presolve(problem: &ConvexQP) -> Result<RawQP, QPError>{
             let (m2, n2) = matrix.shape();
             if m1 == m2{
                 if n == n2{
+                    if let Some((i, _)) = matrix.iter().enumerate().find(|&(_, &x)| {!x.is_finite()}) {
+                        let row = i % m2;
+                        let col = i / m2;
+
+                        return Err(QPError::Undefined{matrix: "a".to_string(), row, col})
+                    }
+
+                    if let Some((i, _)) = vec.iter().enumerate().find(|&(_, &x)| {!x.is_finite()}) {
+                        let row = i;
+
+                        return Err(QPError::Undefined{matrix: "b".to_string(), row, col: 0})
+                    }
+
                     // Correct dims
                     let mut a = matrix.clone();
                     let mut b = vec.clone();
@@ -269,7 +295,7 @@ pub(crate) fn presolve(problem: &ConvexQP) -> Result<RawQP, QPError>{
                                                 if bound.is_sign_negative() & x.is_sign_positive() {return Err(QPError::Infeasible(format!("Inequality constraint {} shows a -∞ upper bound.", i)))};
                                                 if bound.is_sign_positive() & x.is_sign_negative() {return Err(QPError::Infeasible(format!("Inequality constraint {} shows a +∞ lower bound.", i)))};
                                             }
-                                            
+
 
                                         },
 
@@ -324,8 +350,6 @@ pub(crate) fn presolve(problem: &ConvexQP) -> Result<RawQP, QPError>{
         b[m_ineq + m_lb + i] = -v.1.unwrap();
     }
 
-    // TODO: check for NaN/.inf in hess, c, a, b, a_eq, b_eq
-
     Ok(RawQP {
         hess,
         c,
@@ -337,6 +361,339 @@ pub(crate) fn presolve(problem: &ConvexQP) -> Result<RawQP, QPError>{
         x0: problem.x0.clone(),
         options: problem.options.clone()
     })
+}
+
+pub(crate) fn interior_point_method(problem: RawQP) -> Result<QPSolution, QPError>{
+
+    // Unpack rawqp
+    let Dims{n, m, m_eq, m_ineq, m_lb, m_ub} = problem.dims;
+    let c = problem.c;
+    let hess = problem.hess;
+    let a = problem.a;
+    let a_eq = problem.a_eq;
+    let b_eq = problem.b_eq;
+    let b = problem.b;
+
+    // Build the Jacobi matrix of the system
+    let mut newton_raphson_sys = DMatrix::<f64>::zeros(n + m_eq + 2*m, n + m_eq + 2*m);
+
+    newton_raphson_sys.slice_mut((0, 0), (n, n)).copy_from(&hess);
+    newton_raphson_sys.slice_mut((n, 0), (m_eq, n)).copy_from(&a_eq);
+    newton_raphson_sys.slice_mut((n + m_eq, 0), (m, n)).copy_from(&a);
+
+    let r = &-newton_raphson_sys.slice((n, 0), (m_eq + m, n)).transpose();
+    newton_raphson_sys.slice_mut((0, n), (n, m_eq + m)).copy_from(r);
+    newton_raphson_sys.slice_mut((n + m_eq, n + m_eq + m), (m, m)).copy_from(&-DMatrix::<f64>::identity(m, m));
+    newton_raphson_sys.slice_mut((n + m_eq + m, n + m_eq), (m, m)).copy_from(&DMatrix::<f64>::identity(m, m));
+    newton_raphson_sys.slice_mut((n + m_eq + m, n + m_eq + m), (m, m)).copy_from(&DMatrix::<f64>::identity(m, m));
+
+
+    // Init values for multipliers and slacks
+    let mut eq_multipliers = DVector::<f64>::zeros(m_eq);
+    let mut ineq_multipliers = DVector::<f64>::repeat(m, 1.0);
+    let mut slacks = ineq_multipliers.clone();
+
+    // Check for an initial solution, generate one otherwise
+    let mut x0 = if let Some(x) = &problem.x0{
+        x.clone()
+    }else{
+        let mut x0 = DVector::<f64>::repeat(n, 1.0);
+
+        // for i in 0..n {
+        //     if i < m_lb && i < m_ub {
+        //         x0[i] = 0.5 * (problem.lb.as_ref().unwrap()[i] + problem.ub.as_ref().unwrap()[i]);
+        //     }else if i < m_lb {
+        //         x0[i] = 1.1 * problem.lb.as_ref().unwrap()[i] ;
+        //     }else if i < m_ub {
+        //         x0[i] = 1.1 * problem.ub.as_ref().unwrap()[i];
+        //     }
+        // }
+
+        // let mut residues = DVector::<f64>::repeat(n + m_eq + 2 * m_extended, 1.0);
+        // let hess = newton_raphson_sys.slice((0, 0), (n, n));
+        // let a_eq = newton_raphson_sys.slice((n, 0), (m_eq, n));
+        // let a = newton_raphson_sys.slice((n + m_eq, 0), (m_extended, n));
+
+        // let ones = DVector::<f64>::repeat(m_extended, 1.0);
+
+        // let r_dual = &(hess*&x0 + &c - a.transpose()*&ones);
+        // let r_eq = &(a_eq*&x0 - &b_eq);
+        // let r_ineq = &(a*&x0 - &b - &ones);
+        // residues.rows_mut(0, n).copy_from(r_dual);
+        // residues.rows_mut(n, m_eq).copy_from(r_eq);
+        // residues.rows_mut(n + m_eq, m_extended).copy_from(r_ineq);
+
+        // let delta = QR::new(newton_raphson_sys.clone()).solve(&-residues).unwrap();
+
+        // let mut alpha_k: f64 = 1.0;
+        // for i in 0..m_extended{
+        //     if delta[n + m_eq + i] < 0.0 {
+        //         alpha_k = alpha_k.min(-ineq_multipliers[i]/delta[n + m_eq + i])
+        //     }
+        //     if delta[n + m_eq + m_extended + i] < 0.0 {
+        //         alpha_k = alpha_k.min(-slacks[i]/delta[n + m_eq + m_extended + i])
+        //     }
+        // }
+
+        // alpha_k = alpha_k * 0.95;
+
+        // x0 += delta.rows(0, n).map(|x|{x * alpha_k});
+        // eq_multipliers += delta.rows(n, m_eq).map(|x|{x * alpha_k});
+        // ineq_multipliers += delta.rows(n + m_eq, m_extended).map(|x|{x * alpha_k});
+        // slacks += delta.rows(n + m_eq + m_extended, m_extended).map(|x|{x * alpha_k});
+
+        x0
+    };
+
+    let mut residues = DVector::<f64>::zeros(n + m_eq + 2 * m);
+    let mut iterations: usize = 0;
+    let mut first_order_cond: f64 = 0.0;
+
+    for _ in 0..problem.options.max_iterations{
+
+        // Check the first order conditions
+
+        let r_dual = &(&hess*&x0 + &c - &a_eq.transpose()*&eq_multipliers - &a.transpose()*&ineq_multipliers);
+        let r_eq = &(&a_eq*&x0 - &b_eq);
+        let r_ineq = &(&a*&x0 - &b - &slacks);
+        let mut r_s = slacks.component_mul(&ineq_multipliers);
+
+        residues.rows_mut(0, n).copy_from(r_dual);
+        residues.rows_mut(n, m_eq).copy_from(r_eq);
+        residues.rows_mut(n + m_eq, m).copy_from(r_ineq);
+        residues.rows_mut(n + m_eq + m, m).copy_from(&r_s);
+
+        first_order_cond = residues.amax();
+        //println!("{} - {}", iterations, first_order_cond);
+        if first_order_cond < problem.options.opt_tol {
+            break
+        };
+
+        // Update Jacobi matrix
+        newton_raphson_sys.slice_mut((n + m_eq + m, n + m_eq), (m, m)).copy_from(&DMatrix::<f64>::from_diagonal(&slacks));
+        newton_raphson_sys.slice_mut((n + m_eq + m, n + m_eq + m), (m, m)).copy_from(&DMatrix::<f64>::from_diagonal(&ineq_multipliers));
+
+        // QR factorization of the Jacobi matrix
+        let qr = QR::new(newton_raphson_sys.clone());
+
+        let affine_step = qr.solve(&-&residues).unwrap();
+
+        // Cut the step for feasibility
+        let mut alpha: f64 = 1.0;
+        for i in 0..m{
+            if affine_step[n + m_eq + i] < 0.0 {
+                alpha = alpha.min(-ineq_multipliers[i]/affine_step[n + m_eq + i])
+            }
+            if affine_step[n + m_eq + m + i] < 0.0 {
+                alpha = alpha.min(-slacks[i]/affine_step[n + m_eq + m + i])
+            }
+        }
+
+        //alpha = alpha * 0.99;
+
+        let delta_z_aff = affine_step.rows(n + m_eq, m).map(|x|{x*alpha});
+        let delta_s_aff = affine_step.rows(n + m_eq + m, m).map(|x|{x*alpha});
+
+        // Calculate centrality parameter
+        let duality_measure = slacks.dot(&ineq_multipliers)/(m as f64);
+        let affine_duality_measure = slacks.zip_map(&delta_s_aff, |x, y|{x + y}).dot(&ineq_multipliers.zip_map(&delta_z_aff, |x, y|{x + y})) / (m as f64);
+        let centrality_param = (affine_duality_measure/duality_measure).powi(3) * duality_measure;
+
+        // Calculate Mehrotra predictor-corrictor step
+        r_s = r_s + delta_s_aff.zip_map(&delta_z_aff, |x, y|{ x*y - centrality_param });
+        residues.rows_mut(n + m_eq + m, m).copy_from(&r_s);
+
+        let step = qr.solve(&-&residues).unwrap();
+
+        // Cut the step for feasibility
+        alpha = 1.0;
+        for i in 0..m{
+            if step[n + m_eq + i] < 0.0 {
+                alpha = alpha.min(-ineq_multipliers[i]/step[n + m_eq + i])
+            }
+            if step[n + m_eq + m + i] < 0.0 {
+                alpha = alpha.min(-slacks[i]/step[n + m_eq + m + i])
+            }
+        }
+
+        //alpha = alpha * 0.99;
+
+        // Update step
+        x0 += step.rows(0, n).map(|x|{x * alpha});
+        eq_multipliers += step.rows(n, m_eq).map(|x|{x * alpha});
+        ineq_multipliers += step.rows(n + m_eq, m).map(|x|{x * alpha});
+        slacks += step.rows(n + m_eq + m, m).map(|x|{x * alpha});
+
+        iterations += 1;
+        //println!("{}\t{}", iterations, first_order_cond);
+    }
+
+    let soln = QPSolution{
+        fval: 0.5*x0.dot(&(hess*&x0)) + x0.dot(&c),
+        x: x0,
+        ineq_multipliers: if m_ineq > 0 {Some(ineq_multipliers.rows(0, m_ineq).clone_owned())} else {None},
+        eq_multipliers: if m_eq > 0 {Some(eq_multipliers)} else {None},
+        lb_multipliers: if m_lb > 0 {Some(ineq_multipliers.rows(m_ineq, m_lb).clone_owned())} else {None},
+        ub_multipliers: if m_ub > 0 {Some(ineq_multipliers.rows(m_ineq + m_lb, m_ub).clone_owned())} else {None},
+        iterations: iterations,
+        first_order_cond: first_order_cond,
+    };
+
+    Ok(soln)
+}
+
+pub(crate) fn active_set_method(problem: RawQP) -> Result<QPSolution, QPError> {
+
+    // Unpack rawqp
+    let Dims{n, m, m_eq, m_ineq, m_lb, m_ub} = problem.dims;
+    let c = problem.c;
+    let hess = problem.hess;
+    let a = problem.a;
+    let a_eq = problem.a_eq;
+    let b_eq = problem.b_eq;
+    let b = problem.b;
+
+    let phase1_hess = DMatrix::<f64>::zeros(n + 1, n + 1);
+    let mut phase1_c = DVector::<f64>::zeros(n + 1);
+    phase1_c[0] = 1.0;
+    let phase1_a_eq = a_eq.clone().insert_column(0, 0.0);
+    let phase1_a = a.clone().insert_row(m, 0.0).insert_column(0, 1.0);
+    let phase1_b_eq = b_eq.clone();
+
+    let rho = a_eq.amax().max(a.amax()) * problem.options.con_tol;
+    let phase1_b = b.clone().insert_row(m, -rho);
+
+
+    let mut init_soln = DVector::<f64>::zeros(n + 1);
+    if m_eq > 0 {
+        let (q, r) = full_qr(&a_eq.transpose());
+        let x = q.columns(0, m_eq)*forward_substitution(&r.transpose(), &b_eq);
+        //println!("x={}", &x);
+        //println!("a_eq*x - b_eq={}", (a_eq.columns(1, n)*&x-&b_eq).norm());
+
+        init_soln[0] = (&a*&x-&b).max() + 1.0;
+        init_soln.rows_mut(1, n).copy_from(&x);
+
+        //println!("init_soln={}", &init_soln);
+    }else{
+        init_soln[0] = b.max() + 1.0;
+    }
+
+
+    //println!("===Phase 1===\neq:{} = {}\nineq:{} <= {}\nlb:{}", &a_eq, &b_eq, &a, &b, &lb);
+
+    let phase1 = RawQP{
+        hess: phase1_hess,
+        c: phase1_c,
+        a: phase1_a,
+        b: phase1_b,
+        a_eq: phase1_a_eq,
+        b_eq: phase1_b_eq,
+        dims: Dims{
+            n: n + 1,
+            m: m + 1,
+            m_eq,
+            m_ineq,
+            m_lb: 1,
+            m_ub: 0
+        },
+        x0: Some(init_soln),
+        options: QPOptions{
+            algorithm: QPAlgorithm::InteriorPoint,
+            max_iterations: 100,
+            opt_tol: 1e-8,
+            step_tol: 1e-8,
+            fun_tol: 1e-8,
+            con_tol: 1e-8,
+            verbose: false,
+        }
+    };
+
+    let soln = interior_point_method(phase1).unwrap();
+
+    let mut x0 = soln.x.rows(1, n).clone_owned();
+    let mut active_constraints = a_eq.transpose();
+    let ineq_constraints = &a.transpose();
+
+    let mut working_set: HashSet<usize> = HashSet::new();
+    let mut inactive_set: HashSet<usize> = (0..m).collect();
+    let mut rank = m_eq;
+
+    for iter in 0..problem.options.max_iterations{
+        let (q, r) = full_qr(&active_constraints);
+        let null_space = q.columns(rank, n - rank);
+        let grad = -(&hess*&x0 + &c);
+        let p = &null_space * QR::new(null_space.transpose()*&hess*&null_space).solve(&(null_space.transpose()*&grad)).unwrap();
+
+        if p.amax() < 1e-6 {
+            if rank == 0{
+                return Ok(QPSolution{
+                    fval: 0.5*x0.dot(&(&hess*&x0)) + x0.dot(&c),
+                    x: x0,
+                    eq_multipliers: None,
+                    ineq_multipliers: None,
+                    lb_multipliers: None,
+                    ub_multipliers: None,
+                    iterations: iter,
+                    first_order_cond: 0.0,
+                })
+            }else{
+
+                let multipliers = backwards_substitution(&r, &(q.columns(0, rank).transpose() * -&grad));
+
+                if rank == m_eq || multipliers.rows(m_eq, rank - m_eq).min() > -1e-6 {
+                    return Ok(QPSolution{
+                        fval: 0.5*x0.dot(&(&hess*&x0)) + x0.dot(&c),
+                        x: x0,
+                        eq_multipliers: None,
+                        ineq_multipliers: None,
+                        lb_multipliers: None,
+                        ub_multipliers: None,
+                        iterations: iter,
+                        first_order_cond: 0.0,
+                    })
+                }else{
+                    let j = multipliers.rows(m_eq, rank - m_eq).imin();
+                    active_constraints = active_constraints.remove_column(m_eq + j);
+                    working_set.remove(&j);
+                    inactive_set.insert(j);
+                    rank -=1 ;
+                }
+            }
+        }else{
+            let mut alpha: f64 = 1.0;
+            let mut imin = 0;
+
+            for i in inactive_set.iter() {
+                let row = ineq_constraints.column(*i);
+
+                let a_dot_p = row.dot(&p);
+                
+                if a_dot_p < 0.0 {
+                    let cut = (b[*i] - row.dot(&x0))/a_dot_p;
+                    if alpha > cut {
+                        alpha = cut;
+                        imin = *i;
+                    }
+                }
+            }
+
+            if alpha < 1.0 {
+                working_set.insert(imin);
+                inactive_set.remove(&imin);
+                active_constraints = active_constraints.insert_column(rank, 0.0);
+                active_constraints.column_mut(rank).copy_from(&ineq_constraints.column(imin));
+                rank += 1;
+            }
+
+
+            x0 = x0 + alpha * p;
+        }
+
+    }
+
+
+    unimplemented!()
 }
 
 fn full_qr(matrix: &DMatrix<f64>) -> (DMatrix<f64>, DMatrix<f64>){
@@ -487,7 +844,7 @@ mod tests {
     }
 
     #[test]
-    fn presolve_c_NaN() {
+    fn presolve_c_nan() {
         let file = File::open("qp/presolve/hess_c/nan_c.yaml").unwrap();
         let reader = BufReader::new(file);
         let problem: ConvexQP = serde_yaml::from_reader(reader).unwrap();
@@ -496,7 +853,7 @@ mod tests {
         if let QPError::Undefined{matrix, row, col} = error {
             assert_eq!(matrix, "c".to_string());
             assert_eq!(row, 3);
-            assert_eq!(col, 1);
+            assert_eq!(col, 0);
         }else{
             panic!("Wrong type of error from presolve: \"{}\"", error);
         }
@@ -563,6 +920,38 @@ mod tests {
         assert_eq!(raw.a_eq.shape(), (2, 4));
         assert_eq!(raw.a_eq.nrows(), raw.b_eq.nrows());
 
+    }
+
+    #[test]
+    fn presolve_eq_inf_a(){
+        let file = File::open("qp/presolve/eq/inf_a.yaml").unwrap();
+        let reader = BufReader::new(file);
+        let problem: ConvexQP = serde_yaml::from_reader(reader).unwrap();
+        let error = presolve(&problem).expect_err("Expected error from presolve");
+
+        if let QPError::Undefined{matrix, row, col} = error {
+            assert_eq!(matrix, "a_eq".to_string());
+            assert_eq!(row, 2);
+            assert_eq!(col, 3);
+        }else{
+            panic!("Wrong type of error from presolve: \"{}\"", error);
+        }
+    }
+
+    #[test]
+    fn presolve_eq_nan_b() {
+        let file = File::open("qp/presolve/eq/nan_b.yaml").unwrap();
+        let reader = BufReader::new(file);
+        let problem: ConvexQP = serde_yaml::from_reader(reader).unwrap();
+        let error = presolve(&problem).expect_err("Expected error from presolve");
+
+        if let QPError::Undefined{matrix, row, col} = error {
+            assert_eq!(matrix, "b_eq".to_string());
+            assert_eq!(row, 2);
+            assert_eq!(col, 0);
+        }else{
+            panic!("Wrong type of error from presolve: \"{}\"", error);
+        }
     }
 
     #[test]
@@ -809,6 +1198,38 @@ mod tests {
 
         assert_eq!(raw.a, a);
         assert_eq!(raw.b, b);
+    }
+
+    #[test]
+    fn presolve_ineq_inf_a(){
+        let file = File::open("qp/presolve/ineq/inf_a.yaml").unwrap();
+        let reader = BufReader::new(file);
+        let problem: ConvexQP = serde_yaml::from_reader(reader).unwrap();
+        let error = presolve(&problem).expect_err("Expected error from presolve");
+
+        if let QPError::Undefined{matrix, row, col} = error {
+            assert_eq!(matrix, "a".to_string());
+            assert_eq!(row, 0);
+            assert_eq!(col, 0);
+        }else{
+            panic!("Wrong type of error from presolve: \"{}\"", error);
+        }
+    }
+
+    #[test]
+    fn presolve_ineq_nan_b() {
+        let file = File::open("qp/presolve/ineq/nan_b.yaml").unwrap();
+        let reader = BufReader::new(file);
+        let problem: ConvexQP = serde_yaml::from_reader(reader).unwrap();
+        let error = presolve(&problem).expect_err("Expected error from presolve");
+
+        if let QPError::Undefined{matrix, row, col} = error {
+            assert_eq!(matrix, "b".to_string());
+            assert_eq!(row, 1);
+            assert_eq!(col, 0);
+        }else{
+            panic!("Wrong type of error from presolve: \"{}\"", error);
+        }
     }
 
     #[test]

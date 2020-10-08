@@ -2,6 +2,7 @@ use nalgebra::{DMatrix, DVector};
 use serde::{Serialize, Deserialize};
 use std::collections::BTreeMap;
 use thiserror::Error;
+use util::*;
 
 mod util;
 
@@ -110,6 +111,13 @@ impl Default for QPOptions {
     }
 }
 
+impl ConvexQP {
+    pub fn solve(&self) -> Result<QPSolution, QPError>{
+        let raw = presolve(&self)?;
+        interior_point_method(raw)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,5 +196,16 @@ mod tests {
         assert_eq!(bounds.get(&0).unwrap(), &(Some(0.0), Some(1.0)));
         assert_eq!(bounds.get(&1).unwrap(), &(Some(f64::NEG_INFINITY), Some(f64::INFINITY)));
         assert_eq!(bounds.get(&2).unwrap(), &(Some(0.0), None));
+    }
+
+    #[test]
+    fn maros_hs118() {
+        let file = File::open("qp/maros/HS118.json").unwrap();
+        let reader = BufReader::new(file);
+        let problem: ConvexQP = serde_json::from_reader(reader).unwrap();
+        let soln = problem.solve().unwrap();
+        
+        let fval = 664.82;
+        assert!(((soln.fval - fval)/fval).abs() < 0.01);
     }
 }
