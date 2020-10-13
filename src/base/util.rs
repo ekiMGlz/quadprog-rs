@@ -466,7 +466,18 @@ pub(crate) fn interior_point_method(problem: RawQP) -> Result<QPSolution, QPErro
         first_order_cond = residues.amax();
         //println!("{} - {}", iterations, first_order_cond);
         if first_order_cond < problem.options.opt_tol {
-            break
+            let soln = QPSolution{
+                fval: 0.5*x0.dot(&(hess*&x0)) + x0.dot(&c),
+                x: x0,
+                ineq_multipliers: if m_ineq > 0 {Some(ineq_multipliers.rows(0, m_ineq).clone_owned())} else {None},
+                eq_multipliers: if m_eq > 0 {Some(eq_multipliers)} else {None},
+                lb_multipliers: if m_lb > 0 {Some(ineq_multipliers.rows(m_ineq, m_lb).clone_owned())} else {None},
+                ub_multipliers: if m_ub > 0 {Some(ineq_multipliers.rows(m_ineq + m_lb, m_ub).clone_owned())} else {None},
+                iterations: iterations,
+                first_order_cond: first_order_cond,
+            };
+
+            return Ok(soln)
         };
 
         // Update Jacobi matrix
@@ -476,7 +487,10 @@ pub(crate) fn interior_point_method(problem: RawQP) -> Result<QPSolution, QPErro
         // QR factorization of the Jacobi matrix
         let qr = QR::new(newton_raphson_sys.clone());
 
-        let affine_step = qr.solve(&-&residues).unwrap();
+        let affine_step = match qr.solve(&-&residues){
+            Some(x) => x,
+            None => return Err(QPError::Infeasible(format!("Interior point method: Jacobi matrix is singular.")))
+        };
 
         // Cut the step for feasibility
         let mut alpha: f64 = 1.0;
@@ -488,8 +502,6 @@ pub(crate) fn interior_point_method(problem: RawQP) -> Result<QPSolution, QPErro
                 alpha = alpha.min(-slacks[i]/affine_step[n + m_eq + m + i])
             }
         }
-
-        //alpha = alpha * 0.99;
 
         let delta_z_aff = affine_step.rows(n + m_eq, m).map(|x|{x*alpha});
         let delta_s_aff = affine_step.rows(n + m_eq + m, m).map(|x|{x*alpha});
@@ -503,7 +515,10 @@ pub(crate) fn interior_point_method(problem: RawQP) -> Result<QPSolution, QPErro
         r_s = r_s + delta_s_aff.zip_map(&delta_z_aff, |x, y|{ x*y - centrality_param });
         residues.rows_mut(n + m_eq + m, m).copy_from(&r_s);
 
-        let step = qr.solve(&-&residues).unwrap();
+        let step = match qr.solve(&-&residues){
+            Some(x) => x,
+            None => return Err(QPError::Infeasible(format!("Interior point method: Jacobi matrix is singular.")))
+        };
 
         // Cut the step for feasibility
         alpha = 1.0;
@@ -516,7 +531,6 @@ pub(crate) fn interior_point_method(problem: RawQP) -> Result<QPSolution, QPErro
             }
         }
 
-        //alpha = alpha * 0.99;
 
         // Update step
         x0 += step.rows(0, n).map(|x|{x * alpha});
@@ -525,21 +539,12 @@ pub(crate) fn interior_point_method(problem: RawQP) -> Result<QPSolution, QPErro
         slacks += step.rows(n + m_eq + m, m).map(|x|{x * alpha});
 
         iterations += 1;
-        //println!("{}\t{}", iterations, first_order_cond);
     }
 
-    let soln = QPSolution{
-        fval: 0.5*x0.dot(&(hess*&x0)) + x0.dot(&c),
-        x: x0,
-        ineq_multipliers: if m_ineq > 0 {Some(ineq_multipliers.rows(0, m_ineq).clone_owned())} else {None},
-        eq_multipliers: if m_eq > 0 {Some(eq_multipliers)} else {None},
-        lb_multipliers: if m_lb > 0 {Some(ineq_multipliers.rows(m_ineq, m_lb).clone_owned())} else {None},
-        ub_multipliers: if m_ub > 0 {Some(ineq_multipliers.rows(m_ineq + m_lb, m_ub).clone_owned())} else {None},
-        iterations: iterations,
-        first_order_cond: first_order_cond,
-    };
-
-    Ok(soln)
+    Err(QPError::MaxIterationsReached{method: "Interior Point".to_string(),
+    fval: 0.5*x0.dot(&(hess*&x0)) + x0.dot(&c),
+    last_soln: x0,
+    first_order_cond})
 }
 
 pub(crate) fn active_set_method(problem: RawQP) -> Result<QPSolution, QPError> {
@@ -568,19 +573,13 @@ pub(crate) fn active_set_method(problem: RawQP) -> Result<QPSolution, QPError> {
     if m_eq > 0 {
         let (q, r) = full_qr(&a_eq.transpose());
         let x = q.columns(0, m_eq)*forward_substitution(&r.transpose(), &b_eq);
-        //println!("x={}", &x);
-        //println!("a_eq*x - b_eq={}", (a_eq.columns(1, n)*&x-&b_eq).norm());
 
         init_soln[0] = (&a*&x-&b).max() + 1.0;
         init_soln.rows_mut(1, n).copy_from(&x);
 
-        //println!("init_soln={}", &init_soln);
     }else{
         init_soln[0] = b.max() + 1.0;
     }
-
-
-    //println!("===Phase 1===\neq:{} = {}\nineq:{} <= {}\nlb:{}", &a_eq, &b_eq, &a, &b, &lb);
 
     let phase1 = RawQP{
         hess: phase1_hess,
@@ -609,7 +608,7 @@ pub(crate) fn active_set_method(problem: RawQP) -> Result<QPSolution, QPError> {
         }
     };
 
-    let soln = interior_point_method(phase1).unwrap();
+    let soln = interior_point_method(phase1)?;
 
     let mut x0 = soln.x.rows(1, n).clone_owned();
     let mut active_constraints = a_eq.transpose();
@@ -668,7 +667,7 @@ pub(crate) fn active_set_method(problem: RawQP) -> Result<QPSolution, QPError> {
                 let row = ineq_constraints.column(*i);
 
                 let a_dot_p = row.dot(&p);
-                
+
                 if a_dot_p < 0.0 {
                     let cut = (b[*i] - row.dot(&x0))/a_dot_p;
                     if alpha > cut {
@@ -693,7 +692,10 @@ pub(crate) fn active_set_method(problem: RawQP) -> Result<QPSolution, QPError> {
     }
 
 
-    unimplemented!()
+    Err(QPError::MaxIterationsReached{method: "Active Set".to_string(),
+    fval: 0.5*x0.dot(&(hess*&x0)) + x0.dot(&c),
+    last_soln: x0,
+    first_order_cond: 0.0})
 }
 
 fn full_qr(matrix: &DMatrix<f64>) -> (DMatrix<f64>, DMatrix<f64>){
@@ -908,7 +910,6 @@ mod tests {
             panic!("Wrong type of error from presolve: \"{}\"", error);
         }
     }
-
 
     #[test]
     fn presolve_eq(){

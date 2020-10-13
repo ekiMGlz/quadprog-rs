@@ -52,9 +52,9 @@ pub enum QPAlgorithm {
 
 #[derive(Error, Debug)]
 pub enum QPError {
-    #[error("Maximum number of iterations reached. {msg}. Last known solution had function value {fval} and first order condition {first_order_cond}")]
+    #[error("{method} exceded maximum number of iterations. Last known solution had function value {fval} and first order condition {first_order_cond}")]
     MaxIterationsReached{
-        msg: String,
+        method: String,
         last_soln: DVector<f64>,
         fval: f64,
         first_order_cond: f64,
@@ -114,7 +114,10 @@ impl Default for QPOptions {
 impl ConvexQP {
     pub fn solve(&self) -> Result<QPSolution, QPError>{
         let raw = presolve(&self)?;
-        interior_point_method(raw)
+        match self.options.algorithm{
+            QPAlgorithm::InteriorPoint => interior_point_method(raw),
+            QPAlgorithm::ActiveSet => active_set_method(raw)
+        }
     }
 }
 
