@@ -464,7 +464,8 @@ pub(crate) fn interior_point_method(problem: RawQP) -> Result<QPSolution, QPErro
         residues.rows_mut(n + m_eq + m, m).copy_from(&r_s);
 
         first_order_cond = residues.amax();
-        //println!("{} - {}", iterations, first_order_cond);
+        
+        //TODO: Change stopping conditions
         if first_order_cond < problem.options.opt_tol {
             let soln = QPSolution{
                 fval: 0.5*x0.dot(&(hess*&x0)) + x0.dot(&c),
@@ -622,7 +623,10 @@ pub(crate) fn active_set_method(problem: RawQP) -> Result<QPSolution, QPError> {
         let (q, r) = full_qr(&active_constraints);
         let null_space = q.columns(rank, n - rank);
         let grad = -(&hess*&x0 + &c);
-        let p = &null_space * QR::new(null_space.transpose()*&hess*&null_space).solve(&(null_space.transpose()*&grad)).unwrap();
+        let p = match QR::new(null_space.transpose()*&hess*&null_space).solve(&(null_space.transpose()*&grad)){
+            Some(x) => &null_space * x,
+            None => return Err(QPError::Infeasible(format!("Active set method: ZQZ is singular")))
+        };
 
         if p.amax() < 1e-6 {
             if rank == 0{

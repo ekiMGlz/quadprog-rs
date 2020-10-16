@@ -6,7 +6,7 @@ use util::*;
 
 mod util;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ConvexQP {
     hess: DMatrix<f64>,
     c: DVector<f64>,
@@ -206,9 +206,51 @@ mod tests {
         let file = File::open("qp/maros/HS118.json").unwrap();
         let reader = BufReader::new(file);
         let problem: ConvexQP = serde_json::from_reader(reader).unwrap();
+        let mut problem_as = problem.clone();
+        problem_as.options.algorithm = QPAlgorithm::ActiveSet;
+
         let soln = problem.solve().unwrap();
+        let soln2 = problem_as.solve().unwrap();
         
         let fval = 664.82;
         assert!(((soln.fval - fval)/fval).abs() < 0.01);
+        assert!(((soln2.fval - fval)/fval).abs() < 0.01);
+    }
+
+    #[test]
+    #[ignore = "Expensive, run in release"]
+    fn maros_dualc1() {
+        let file = File::open("qp/maros/DUALC1.json").unwrap();
+        let reader = BufReader::new(file);
+        let mut problem: ConvexQP = serde_json::from_reader(reader).unwrap();
+        problem.options.opt_tol = 1e-5;
+        let mut problem_as = problem.clone();
+        problem_as.options.algorithm = QPAlgorithm::ActiveSet;
+
+        let soln = problem.solve().unwrap();
+        let soln2 = problem_as.solve().unwrap();
+        
+        let fval = 6.155250829462746e+03;
+        assert!(((soln.fval - fval)/fval).abs() < 0.01);
+        assert!(((soln2.fval - fval)/fval).abs() < 0.01);
+    }
+
+    
+
+    #[test]
+    #[ignore = "Expensive, run in release"]
+    fn maros_dualc2() {
+        let file = File::open("qp/maros/DUALC2.json").unwrap();
+        let reader = BufReader::new(file);
+        let problem: ConvexQP = serde_json::from_reader(reader).unwrap();
+        let mut problem_as = problem.clone();
+        problem_as.options.algorithm = QPAlgorithm::ActiveSet;
+
+        let soln = problem.solve().unwrap();
+        let soln2 = problem_as.solve().unwrap();
+        
+        let fval = 3.551307692684270e+03;
+        assert!(((soln.fval - fval)/fval).abs() < 0.01);
+        assert!(((soln2.fval - fval)/fval).abs() < 0.01);
     }
 }
