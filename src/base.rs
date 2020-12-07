@@ -8,39 +8,39 @@ mod util;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ConvexQP {
-    hess: DMatrix<f64>,
-    c: DVector<f64>,
-    a: Option<DMatrix<f64>>,
-    b: Option<DVector<f64>>,
-    a_eq: Option<DMatrix<f64>>,
-    b_eq: Option<DVector<f64>>,
-    bounds: Option<BTreeMap<usize, (Option<f64>, Option<f64>)>>,
-    x0: Option<DVector<f64>>,
+    pub hess: DMatrix<f64>,
+    pub c: DVector<f64>,
+    pub a: Option<DMatrix<f64>>,
+    pub b: Option<DVector<f64>>,
+    pub a_eq: Option<DMatrix<f64>>,
+    pub b_eq: Option<DVector<f64>>,
+    pub bounds: Option<BTreeMap<usize, (Option<f64>, Option<f64>)>>,
+    pub x0: Option<DVector<f64>>,
     #[serde(default)]
-    options: QPOptions,
+    pub options: QPOptions,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct QPOptions {
-    algorithm: QPAlgorithm,
-    max_iterations: usize,
-    opt_tol: f64,
-    step_tol: f64,
-    fun_tol: f64,
-    con_tol: f64,
-    verbose: bool,
+    pub algorithm: QPAlgorithm,
+    pub max_iterations: usize,
+    pub opt_tol: f64,
+    pub step_tol: f64,
+    pub fun_tol: f64,
+    pub con_tol: f64,
+    pub verbose: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct QPSolution {
-    x: DVector<f64>,
-    eq_multipliers: Option<DVector<f64>>,
-    ineq_multipliers: Option<DVector<f64>>,
-    lb_multipliers: Option<DVector<f64>>,
-    ub_multipliers: Option<DVector<f64>>,
-    iterations: usize,
-    fval: f64,
-    first_order_cond: f64,
+    pub x: DVector<f64>,
+    pub eq_multipliers: Option<DVector<f64>>,
+    pub ineq_multipliers: Option<DVector<f64>>,
+    pub lb_multipliers: Option<DVector<f64>>,
+    pub ub_multipliers: Option<DVector<f64>>,
+    pub iterations: usize,
+    pub fval: f64,
+    pub first_order_cond: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -50,7 +50,7 @@ pub enum QPAlgorithm {
     //Other(fn(&ConvexQP) -> Result<QPSolution, QPError>),
 }
 
-#[derive(Error, Debug)]
+#[derive(Serialize, Deserialize, Error, Debug)]
 pub enum QPError {
     #[error("{method} exceded maximum number of iterations. Last known solution had function value {fval} and first order condition {first_order_cond}")]
     MaxIterationsReached{
