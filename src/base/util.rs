@@ -1,34 +1,34 @@
-use nalgebra::{DMatrix, DVector, QR};
+use nalgebra::{DMatrix, DVector, QR, SymmetricEigen};
 use std::collections::{BTreeMap, HashSet};
 use crate::base::*;
 
 // struct for problem data after presolving
 #[derive(Debug)]
 pub(crate) struct RawQP {
-    hess: DMatrix<f64>, // problem.hess.symmetric()
-    c: DVector<f64>,
-    a: DMatrix<f64>,    // extended ineq matrix [-A; I; -I]
-    b: DVector<f64>,    // extended ineq rhs [-b; lb; -ub]
-    a_eq: DMatrix<f64>, // A_eq, full rank, no full zero rows
-    b_eq: DVector<f64>, // b_eq to match A_eq changes
-    dims: Dims,
-    x0: Option<DVector<f64>>,
-    options: crate::base::QPOptions,
+    pub(crate) hess: DMatrix<f64>, // problem.hess.symmetric()
+    pub(crate) c: DVector<f64>,
+    pub(crate) a: DMatrix<f64>,    // extended ineq matrix [-A; I; -I]
+    pub(crate) b: DVector<f64>,    // extended ineq rhs [-b; lb; -ub]
+    pub(crate) a_eq: DMatrix<f64>, // A_eq, full rank, no full zero rows
+    pub(crate) b_eq: DVector<f64>, // b_eq to match A_eq changes
+    pub(crate) dims: Dims,
+    pub(crate) x0: Option<DVector<f64>>,
+    pub(crate) options: crate::base::QPOptions,
 }
 
 #[derive(Debug)]
 pub(crate) struct Dims {
-    n: usize,
-    m: usize,   // = m_ineq + m_lb + m_ub
-    m_eq: usize,
-    m_ineq: usize,
-    m_lb: usize,
-    m_ub: usize
+    pub(crate) n: usize,
+    pub(crate) m: usize,   // = m_ineq + m_lb + m_ub
+    pub(crate) m_eq: usize,
+    pub(crate) m_ineq: usize,
+    pub(crate) m_lb: usize,
+    pub(crate) m_ub: usize
 }
 
 pub(crate) fn presolve(problem: &ConvexQP) -> Result<RawQP, QPError>{
 
-    let numerical_zero = 1e-8;
+    let eps = 1e-8;
 
     // Check dimensions
     let (n, hess, c) = {
@@ -49,8 +49,15 @@ pub(crate) fn presolve(problem: &ConvexQP) -> Result<RawQP, QPError>{
                     return Err(QPError::Undefined{matrix: "c".to_string(), row, col: 0})
                 }
 
-                // TODO: Check hess convexity (?)
-                (n1, problem.hess.symmetric_part(), problem.c.clone())
+                // Maybe change to cholesky fact to check for convexity
+                let eig_decom = SymmetricEigen::new(problem.hess.symmetric_part());
+                if let Some(x) = eig_decom.eigenvalues.iter().find(|&&x| {x < -eps}){
+                    return Err(QPError::Infeasible(format!("Non-convex problem, negative eigenvalue ({}) found in hessian matrix.", x)))
+                }
+
+                // Maybe send eigs numerically zero to 0.0
+
+                (n1, eig_decom.recompose(), problem.c.clone())
             }else{
                 return Err(QPError::DimensionMismatch{matrix: "c".to_string(), dims: (n1, 1), expected_dims:(n2, 1)});
             }
@@ -84,8 +91,8 @@ pub(crate) fn presolve(problem: &ConvexQP) -> Result<RawQP, QPError>{
 
                     // Check and remove zero rows
                     for i in (0..m1).rev(){
-                        if a_eq.row(i).amax() < numerical_zero {
-                            if b_eq[i].abs() < numerical_zero {
+                        if a_eq.row(i).amax() < eps {
+                            if b_eq[i].abs() < eps {
                                 a_eq = a_eq.remove_row(i);
                                 b_eq = b_eq.remove_row(i);
                             }else{
@@ -103,7 +110,7 @@ pub(crate) fn presolve(problem: &ConvexQP) -> Result<RawQP, QPError>{
                     }
 
                     let r = QR::new(a_eq.clone()).r();
-                    if r.row(m - 1).amax() < numerical_zero {
+                    if r.row(m - 1).amax() < eps {
                         // QR factorization has a 0 row in R matrix with m <=n, therefore A_eq is rank deficient
                         return Err(QPError::RankDeficient("Equality constraints are rank deficient, check for redundant constraints.".to_string()))
                     }
@@ -194,11 +201,11 @@ pub(crate) fn presolve(problem: &ConvexQP) -> Result<RawQP, QPError>{
                     // Check a for 0 rows or singleton rows
                     for i in (0..m1).rev(){
                         let row = a.row(i);
-                        let mut row_iter = row.iter().enumerate().filter(|(_, x)| {x.abs() > numerical_zero});
+                        let mut row_iter = row.iter().enumerate().filter(|(_, x)| {x.abs() > eps});
                         match row_iter.next() {
                             None => {
                                 // 0 nonzero elements
-                                if b[i] > -numerical_zero {
+                                if b[i] > -eps {
                                     a = a.remove_row(i);
                                     b = b.remove_row(i);
                                 }else{
@@ -373,6 +380,7 @@ pub(crate) fn interior_point_method(problem: RawQP) -> Result<QPSolution, QPErro
     let a_eq = problem.a_eq;
     let b_eq = problem.b_eq;
     let b = problem.b;
+    let options = problem.options;
 
     // Build the Jacobi matrix of the system
     let mut newton_raphson_sys = DMatrix::<f64>::zeros(n + m_eq + 2*m, n + m_eq + 2*m);
@@ -397,7 +405,7 @@ pub(crate) fn interior_point_method(problem: RawQP) -> Result<QPSolution, QPErro
     let mut x0 = if let Some(x) = &problem.x0{
         x.clone()
     }else{
-        let mut x0 = DVector::<f64>::repeat(n, 1.0);
+        let x0 = DVector::<f64>::repeat(n, 1.0);
 
         // for i in 0..n {
         //     if i < m_lb && i < m_ub {
@@ -446,10 +454,10 @@ pub(crate) fn interior_point_method(problem: RawQP) -> Result<QPSolution, QPErro
     };
 
     let mut residues = DVector::<f64>::zeros(n + m_eq + 2 * m);
-    let mut iterations: usize = 0;
     let mut first_order_cond: f64 = 0.0;
+    let tol_scaling = [1.0, hess.norm(), c.norm(), a.norm(), a_eq.norm(), b.norm(), b_eq.norm()].iter().copied().fold(f64::NAN, f64::max);
 
-    for _ in 0..problem.options.max_iterations{
+    for iterations in 0..options.max_iterations{
 
         // Check the first order conditions
 
@@ -458,15 +466,8 @@ pub(crate) fn interior_point_method(problem: RawQP) -> Result<QPSolution, QPErro
         let r_ineq = &(&a*&x0 - &b - &slacks);
         let mut r_s = slacks.component_mul(&ineq_multipliers);
 
-        residues.rows_mut(0, n).copy_from(r_dual);
-        residues.rows_mut(n, m_eq).copy_from(r_eq);
-        residues.rows_mut(n + m_eq, m).copy_from(r_ineq);
-        residues.rows_mut(n + m_eq + m, m).copy_from(&r_s);
-
-        first_order_cond = residues.amax();
-        
-        //TODO: Change stopping conditions
-        if first_order_cond < problem.options.opt_tol {
+        // Stopping conditions
+        if r_eq.lp_norm(1) + r_ineq.lp_norm(1) <= tol_scaling*options.con_tol && r_dual.lp_norm(1) <=tol_scaling * options.fun_tol{
             let soln = QPSolution{
                 fval: 0.5*x0.dot(&(hess*&x0)) + x0.dot(&c),
                 x: x0,
@@ -479,7 +480,14 @@ pub(crate) fn interior_point_method(problem: RawQP) -> Result<QPSolution, QPErro
             };
 
             return Ok(soln)
-        };
+        }
+
+        residues.rows_mut(0, n).copy_from(r_dual);
+        residues.rows_mut(n, m_eq).copy_from(r_eq);
+        residues.rows_mut(n + m_eq, m).copy_from(r_ineq);
+        residues.rows_mut(n + m_eq + m, m).copy_from(&r_s);
+
+        first_order_cond = residues.amax();
 
         // Update Jacobi matrix
         newton_raphson_sys.slice_mut((n + m_eq + m, n + m_eq), (m, m)).copy_from(&DMatrix::<f64>::from_diagonal(&slacks));
@@ -539,17 +547,17 @@ pub(crate) fn interior_point_method(problem: RawQP) -> Result<QPSolution, QPErro
         ineq_multipliers += step.rows(n + m_eq, m).map(|x|{x * alpha});
         slacks += step.rows(n + m_eq + m, m).map(|x|{x * alpha});
 
-        iterations += 1;
     }
 
-    Err(QPError::MaxIterationsReached{method: "Interior Point".to_string(),
+    Err(QPError::MaxIterationsReached{algorithm: QPAlgorithm::InteriorPoint,
     fval: 0.5*x0.dot(&(hess*&x0)) + x0.dot(&c),
     last_soln: x0,
     first_order_cond})
 }
 
 pub(crate) fn active_set_method(problem: RawQP) -> Result<QPSolution, QPError> {
-
+    let eps = 1e-8;
+    
     // Unpack rawqp
     let Dims{n, m, m_eq, m_ineq, m_lb, m_ub} = problem.dims;
     let c = problem.c;
@@ -610,16 +618,19 @@ pub(crate) fn active_set_method(problem: RawQP) -> Result<QPSolution, QPError> {
     };
 
     let soln = interior_point_method(phase1)?;
-
+    
     let mut x0 = soln.x.rows(1, n).clone_owned();
     let mut active_constraints = a_eq.transpose();
     let ineq_constraints = &a.transpose();
 
-    let mut working_set: HashSet<usize> = HashSet::new();
+
+    let mut working_set: Vec<usize> = Vec::new();
     let mut inactive_set: HashSet<usize> = (0..m).collect();
     let mut rank = m_eq;
 
     for iter in 0..problem.options.max_iterations{
+        
+
         let (q, r) = full_qr(&active_constraints);
         let null_space = q.columns(rank, n - rank);
         let grad = -(&hess*&x0 + &c);
@@ -628,64 +639,98 @@ pub(crate) fn active_set_method(problem: RawQP) -> Result<QPSolution, QPError> {
             None => return Err(QPError::Infeasible(format!("Active set method: ZQZ is singular")))
         };
 
-        if p.amax() < 1e-6 {
+        if p.amax() < eps {
             if rank == 0{
+
+                let eq_multipliers = if m_eq > 0 {Some(DVector::<f64>::zeros(m_eq))} else{ None };
+                let ineq_multipliers = if m_ineq > 0 {Some(DVector::<f64>::zeros(m_ineq))} else{ None };
+                let lb_multipliers = if m_lb > 0 {Some(DVector::<f64>::zeros(m_lb))} else{ None };
+                let ub_multipliers = if m_ub > 0 {Some(DVector::<f64>::zeros(m_ub))} else{ None };
+
                 return Ok(QPSolution{
                     fval: 0.5*x0.dot(&(&hess*&x0)) + x0.dot(&c),
                     x: x0,
-                    eq_multipliers: None,
-                    ineq_multipliers: None,
-                    lb_multipliers: None,
-                    ub_multipliers: None,
+                    eq_multipliers,
+                    ineq_multipliers,
+                    lb_multipliers,
+                    ub_multipliers,
                     iterations: iter,
                     first_order_cond: 0.0,
                 })
             }else{
 
                 let multipliers = backwards_substitution(&r, &(q.columns(0, rank).transpose() * -&grad));
+                
+                if rank == m_eq || multipliers.rows(m_eq, rank - m_eq).min() > -eps {
+                    let eq_multipliers = Some(multipliers.rows(0, m_eq).clone_owned());
+                    let mut ineq_multipliers = DVector::<f64>::zeros(m_ineq);
+                    let mut lb_multipliers = DVector::<f64>::zeros(m_lb);
+                    let mut ub_multipliers = DVector::<f64>::zeros(m_ub);
 
-                if rank == m_eq || multipliers.rows(m_eq, rank - m_eq).min() > -1e-6 {
+                    for (i, mu) in working_set.iter().copied().zip(multipliers.iter().skip(m_eq).copied()) {
+                        if i < m_ineq {
+                            ineq_multipliers[i] = mu;
+                        }else if i < m_ineq + m_lb {
+                            lb_multipliers[i - m_ineq] = mu;
+                        }else{
+                            ub_multipliers[i - m_ineq - m_lb] = mu;
+                        }
+                    }
+
+                    let ineq_multipliers = if m_ineq > 0 {Some(ineq_multipliers)} else{ None };
+                    let lb_multipliers = if m_lb > 0 {Some(lb_multipliers)} else{ None };
+                    let ub_multipliers = if m_ub > 0 {Some(ub_multipliers)} else{ None };
+
                     return Ok(QPSolution{
                         fval: 0.5*x0.dot(&(&hess*&x0)) + x0.dot(&c),
                         x: x0,
-                        eq_multipliers: None,
-                        ineq_multipliers: None,
-                        lb_multipliers: None,
-                        ub_multipliers: None,
+                        eq_multipliers,
+                        ineq_multipliers,
+                        lb_multipliers,
+                        ub_multipliers,
                         iterations: iter,
                         first_order_cond: 0.0,
                     })
                 }else{
                     let j = multipliers.rows(m_eq, rank - m_eq).imin();
                     active_constraints = active_constraints.remove_column(m_eq + j);
-                    working_set.remove(&j);
-                    inactive_set.insert(j);
+                    let constraint_index = working_set.remove(j);
+                    inactive_set.insert(constraint_index);
                     rank -=1 ;
                 }
             }
         }else{
+
             let mut alpha: f64 = 1.0;
-            let mut imin = 0;
+            let mut imin = None;
 
             for i in inactive_set.iter() {
                 let row = ineq_constraints.column(*i);
 
                 let a_dot_p = row.dot(&p);
 
-                if a_dot_p < 0.0 {
-                    let cut = (b[*i] - row.dot(&x0))/a_dot_p;
+                if a_dot_p < -eps {
+                    let slack = b[*i] - row.dot(&x0);
+                    
+                    if slack.abs() < eps{
+                        alpha = 0.0;
+                        imin = Some(*i);
+                        break;
+                    }
+
+                    let cut = slack/a_dot_p;
                     if alpha > cut {
                         alpha = cut;
-                        imin = *i;
+                        imin = Some(*i);
                     }
                 }
             }
 
-            if alpha < 1.0 {
-                working_set.insert(imin);
-                inactive_set.remove(&imin);
+            if let Some(i) = imin {
+                working_set.push(i);
+                inactive_set.remove(&i);
                 active_constraints = active_constraints.insert_column(rank, 0.0);
-                active_constraints.column_mut(rank).copy_from(&ineq_constraints.column(imin));
+                active_constraints.column_mut(rank).copy_from(&ineq_constraints.column(i));
                 rank += 1;
             }
 
@@ -696,11 +741,12 @@ pub(crate) fn active_set_method(problem: RawQP) -> Result<QPSolution, QPError> {
     }
 
 
-    Err(QPError::MaxIterationsReached{method: "Active Set".to_string(),
+    Err(QPError::MaxIterationsReached{algorithm: QPAlgorithm::ActiveSet,
     fval: 0.5*x0.dot(&(hess*&x0)) + x0.dot(&c),
     last_soln: x0,
     first_order_cond: 0.0})
 }
+
 
 fn full_qr(matrix: &DMatrix<f64>) -> (DMatrix<f64>, DMatrix<f64>){
 
