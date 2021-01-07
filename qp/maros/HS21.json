@@ -1,0 +1,1 @@
+{"hess":{"nrows":2,"ncols":2,"data":[0.02,0,0,2]},"c":{"nrows":2,"ncols":null,"data":[0,0]},"a":{"nrows":1,"ncols":2,"data":[-10,1]},"b":{"nrows":1,"ncols":null,"data":[-10]},"bounds":{"0": [2, 50],"1": [-50, 50]}}

@@ -1,0 +1,9 @@
+hess: 
+  nrows: 3
+  ncols: 3
+  data: [0,0,0,0,1,0,0,0,2]
+
+c: 
+  nrows: 3
+  ncols: null
+  data: [4,5,6]

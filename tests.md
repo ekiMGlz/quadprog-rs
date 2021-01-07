@@ -4,7 +4,8 @@
 
 * [x] Rectangular hess
 * [x] Wrong c dims
-* [ ] Non positive semi-definite hess
+* [x] Non positive semi-definite hess
+* [x] Strictly psd hess
 * [x] inf/nan values
 
 ### Eq constraints

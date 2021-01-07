@@ -21,7 +21,7 @@ pub struct ConvexQP {
     pub options: QPOptions,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub struct QPOptions {
     pub algorithm: QPAlgorithm,
     pub max_iterations: usize,
@@ -159,9 +159,10 @@ impl ConvexQP {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::File;
-    use std::io::BufReader;
     use float_cmp::{ApproxEq, ApproxEqRatio};
+    use std::io::{self, BufReader, Write};
+    use std::fs::{self, File};
+    use std::collections::HashMap;
 
     #[test]
     fn read_full_problem() {
@@ -252,29 +253,6 @@ mod tests {
         println!("Optimum: {}\nInterior Point:\n\tfval: {}\n\titers: {}\nActive Set\n\tfval: {}\n\titers: {}", fval, soln.fval, soln.iterations, soln2.fval, soln2.iterations);
         assert!(fval.approx_eq_ratio(&soln.fval, 0.01));
         assert!(fval.approx_eq_ratio(&soln2.fval, 0.01));
-
-        
-        let compare_vecs = |x: &DVector<f64>, y: &DVector<f64>| {
-            let n1 = x.amax();
-            let n2 = y.amax();
-
-            if !n1.is_normal() && n1.is_finite(){
-                println!("{}, {}", n1, n2);
-                n2 <=0.05
-            }else if !n2.is_normal() && n2.is_finite() {
-                println!("{}, {}", n1, n2);
-                n1 <=0.05
-            }else{
-                
-                let n = n1.max(n2);
-                let diff_norm = (x - y).amax();
-                println!("{}, {}, {}", n1, n2, diff_norm);
-                (x - y).amax()/n <= 0.01
-            }
-        };
-        assert!(compare_vecs(&soln.ineq_multipliers.unwrap(), &soln2.ineq_multipliers.unwrap()));
-        assert!(compare_vecs(&soln.lb_multipliers.unwrap(), &soln2.lb_multipliers.unwrap()));
-        assert!(compare_vecs(&soln.ub_multipliers.unwrap(), &soln2.ub_multipliers.unwrap()));
     }
 
     #[test]
@@ -354,5 +332,172 @@ mod tests {
         assert!(soln.lb_multipliers.unwrap().iter().zip(soln2.lb_multipliers.unwrap().iter()).all(compare));
         assert!(soln.ub_multipliers.unwrap().iter().zip(soln2.ub_multipliers.unwrap().iter()).all(compare));
         
+    }
+
+    #[test]
+    #[ignore = "Expensive, run in release"]
+    fn maros_full_ip() -> io::Result<()> {
+        let solver_options = QPOptions{
+            algorithm: QPAlgorithm::InteriorPoint,
+            max_iterations: 150,
+            opt_tol: 1e-8,
+            step_tol: 1e-8,
+            fun_tol: 1e-8,
+            con_tol: 1e-8,
+            verbose: false,
+        };
+
+        let mut results = File::create(&"results\\ip_results.csv")?;
+        write!(results, "NAME,ITER,FVAL\n")?;
+
+        let file = File::open("qp\\optim.yaml")?;
+        let reader = BufReader::new(file);
+        let optimos: HashMap<String, f64> = serde_yaml::from_reader(reader).unwrap();
+
+        for entry in fs::read_dir("qp\\maros")? {
+
+            let entry = entry?;
+            let path = entry.path();
+
+            if path.is_file() && "json" == path.extension().unwrap(){
+                
+                let name = path.file_stem().unwrap().to_str().unwrap();
+
+                let file = File::open(&path).unwrap();
+                let reader = BufReader::new(file);
+                let mut problem: ConvexQP = serde_json::from_reader(reader).unwrap();
+                problem.options = solver_options;
+
+                match problem.solve() {
+                    Ok(soln) => {
+                        println!("{} - Matlab: {}, Rust: {} ({}) ({})", name, optimos[name], soln.fval, soln.iterations, soln.first_order_cond);
+                        // Check answer (maybe change to 5%)
+                        if optimos[name].abs() > 1e-8 {
+                            assert!((soln.fval - optimos[name]).abs() / soln.fval < 0.01);
+                        }else{
+                            assert!(soln.fval.abs() < 1e-8);
+                        }
+                        
+                        write!(results, "{},{},{}\n", name, soln.iterations, soln.fval)?;
+                        },
+                    Err(QPError::MaxIterationsReached{fval, ..}) => {write!(results, "{},{},{}\n", name, 150, fval)?;},
+                    _ => write!(results, "{},NAN,NAN\n", name)?,
+                }
+
+
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "Expensive, run in release"]
+    fn maros_full_as() -> io::Result<()> {
+        let solver_options = QPOptions{
+            algorithm: QPAlgorithm::ActiveSet,
+            max_iterations: 100,
+            opt_tol: 1e-8,
+            step_tol: 1e-8,
+            fun_tol: 1e-8,
+            con_tol: 1e-8,
+            verbose: false,
+        };
+
+        let mut results = File::create(&"results\\as_results.csv")?;
+        write!(results, "NAME,ITER,FVAL\n")?;
+
+        let file = File::open("qp\\optim.yaml")?;
+        let reader = BufReader::new(file);
+        let optimos: HashMap<String, f64> = serde_yaml::from_reader(reader).unwrap();
+
+        for entry in fs::read_dir("qp\\maros")? {
+            
+            let entry = entry?;
+            let path = entry.path();
+
+            if path.is_file() && "json" == path.extension().unwrap(){
+                
+                let name = path.file_stem().unwrap().to_str().unwrap();
+
+                let file = File::open(&path).unwrap();
+                let reader = BufReader::new(file);
+                let mut problem: ConvexQP = serde_json::from_reader(reader).unwrap();
+                problem.options = solver_options;
+                
+                match problem.solve() {
+                    Ok(soln) => {
+                        println!("{} - Matlab: {}, Rust: {} ({}) ({})", name, optimos[name], soln.fval, soln.iterations, soln.first_order_cond);
+                        // Check answer (maybe change to 5%)
+                        if optimos[name].abs() > 1e-8 {
+                            assert!((soln.fval - optimos[name]).abs() / soln.fval < 0.01);
+                        }else{
+                            assert!(soln.fval.abs() < 1e-8);
+                        }
+                        
+                        write!(results, "{},{},{}\n", name, soln.iterations, soln.fval)?;
+                        },
+                    Err(QPError::MaxIterationsReached{fval, ..}) => {write!(results, "{},{},{}\n", name, 150, fval)?;},
+                    _ => write!(results, "{},NAN,NAN\n", name)?,
+                }
+
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "Expensive, run in release"]
+    fn maros_full_as_fsp() -> io::Result<()> {
+        
+
+        let mut results = File::create(&"results\\as_fsp_results.csv")?;
+        write!(results, "NAME,ITER,FVAL\n")?;
+
+        let file = File::open("qp\\optim.yaml")?;
+        let reader = BufReader::new(file);
+        let optimos: HashMap<String, f64> = serde_yaml::from_reader(reader).unwrap();
+
+        for entry in fs::read_dir("qp\\maros_feasible")? {
+            
+            let entry = entry?;
+            let path = entry.path();
+
+            if path.is_file() && "json" == path.extension().unwrap(){
+                
+                let name = path.file_stem().unwrap().to_str().unwrap();
+
+                let file = File::open(&path).unwrap();
+                let reader = BufReader::new(file);
+                let problem: ConvexQP = serde_json::from_reader(reader).unwrap();
+                
+                match problem.solve() {
+                    Ok(soln) => {
+                        println!("{} - Matlab: {}, Rust: {} ({}) ({})", name, optimos[name], soln.fval, soln.iterations, soln.first_order_cond);
+                        // Check answer (maybe change to 5%)
+                        if optimos[name].abs() > 1e-8 {
+                            assert!((soln.fval - optimos[name]).abs() / soln.fval < 0.01);
+                        }else{
+                            assert!(soln.fval.abs() < 1e-8);
+                        }
+                        
+                        write!(results, "{},{},{}\n", name, soln.iterations, soln.fval)?;
+                        },
+                    Err(QPError::MaxIterationsReached{fval, ..}) => {write!(results, "{},{},{}\n", name, 150, fval)?;},
+                    _ => write!(results, "{},NAN,NAN\n", name)?,
+                }
+
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn problematic_things() {
+        let file = File::open("qp/maros_feasible/PRIMALC1.json").unwrap();
+        let reader = BufReader::new(file);
+        let problem: ConvexQP = serde_json::from_reader(reader).unwrap();
+        
+        let soln = problem.solve().unwrap();
+        println!("iters: {}, fval: {}, {}", soln.iterations, soln.fval, soln.first_order_cond);
     }
 }
